@@ -1,0 +1,5 @@
+"0","df_train %>% "
+"0","  ggplot(aes(x = diameter)) +"
+"0","  geom_histogram(fill = ""green"", color = ""black"") +"
+"0","  ggtitle('Distribución del Diámetro') + "
+"0","  theme(plot.title = element_text(hjust = 0.5))"

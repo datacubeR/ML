@@ -1,0 +1,154 @@
+---
+title: 'Tarea 2: KNN'
+author: "Alex Alvarez y Alfonso Tobar"
+date: "2022-10-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introducción 
+
+```{r}
+set.seed(42) # Reproducibilidad
+pacman::p_load(tidyverse, magrittr, umap, tidymodels, kknn)
+
+df_train <- read_csv("dataTrain.csv") %>% 
+  select(-...1, -index)
+df_test <- read_csv("dataEval.csv") %>% 
+  select(-...1)
+```
+
+```{r}
+df_train %>% 
+  glimpse()
+```
+
+# EDA
+
+## Vector Objetivo
+
+```{r}
+df_train %>% 
+  ggplot(aes(x = diameter)) +
+  geom_histogram(fill = "green", color = "black") +
+  ggtitle('Distribución del Diámetro') + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+df_train %>% 
+  ggplot(aes(x = log(diameter))) +
+  geom_histogram(fill = "blue", color = "black") +
+  ggtitle('Distribución del Log del Diámetro') + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+df_train %>% 
+  select_if(is.numeric) %>% 
+  gather() %>% 
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = 10)+
+  facet_wrap(~key, scales = "free_x")
+```
+
+## Chequear los valores Nulos
+
+```{r}
+df_train %>% 
+  select_if(is.numeric) %>% 
+  summarise_each(funs(sum(is.na(.)))) %>% 
+  gather() %>% 
+  mutate(value = value/nrow(df_train)) %>% 
+  arrange(desc(value)) %>% 
+  ggplot(aes(x = reorder(key, -value), y = value)) + 
+  geom_col(fill = "purple" ,color = "black") +
+  scale_y_continuous(labels=scales::percent) +
+  ggtitle('Distribución de Valores Nulos en Variables Continuas') + 
+  theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+```{r}
+df_train %>% 
+  filter(is.na(diameter))
+```
+
+```{r}
+
+df_train %>% 
+  select_if(negate(is.numeric)) %>% 
+  summarise_each(funs(sum(is.na(.)))) %>% 
+  gather() %>% 
+  mutate(value = value/nrow(df_train)) %>% 
+  arrange(desc(value)) %>% 
+  ggplot(aes(x = reorder(key, -value), y = value)) + 
+  geom_col(fill = "yellow" ,color = "black") +
+  scale_y_continuous(labels=scales::percent) +
+  ggtitle('Distribución de Valores Nulos en Variables Categóricas') + 
+  theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+```{r}
+df_train %>% 
+  ggplot(aes(x = neo)) + geom_bar(fill = "blue", color = "black") +
+  ggtitle('Distribución de Valores Nulos en Variables Categóricas') + 
+  theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+```{r}
+df_train %>% 
+  ggplot(aes(x = pha)) + geom_bar(fill = "orange", color = "black") +
+  ggtitle('Distribución de Valores Nulos en Variables Categóricas') + 
+  theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+```{r}
+to_remove <- df_train %>% 
+  summarise_each(funs(mean(is.na(.)))) %>% 
+  gather() %>% 
+  filter(value > 0.6) %>% 
+  pull(key)
+to_remove
+```
+
+# Correlaciones
+
+```{r}
+df_train[setdiff(colnames(df_train),to_remove)] %>% 
+  select_if(is.numeric) %>% 
+  drop_na() %>% 
+  cor() %>% 
+  heatmap()
+```
+
+
+```{r}
+corr_mat <- df_train[setdiff(colnames(df_train),to_remove)] %>% 
+  select_if(is.numeric) %>% 
+  drop_na() %>% 
+  cor() %>% 
+  data.frame() 
+corr_mat
+corr_mat["diameter"] %>%
+  arrange(desc(diameter))
+```
+
+```{r}
+remove_corr = c("a", "per_y")
+remove_corr_2 = c("i","per_y","om","w","e","condition_code")
+```
+
+```{r}
+
+quantile(df_train$diameter, probs = c(0, 0.01,0.05,0.1,0.25,0.5, 0.75, 0.9, 0.95, 0.99, 1), na.rm = TRUE)
+```
+
+
+# Modelamiento
+
+
+
+
+# Conclusiones
