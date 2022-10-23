@@ -1,6 +1,0 @@
-"0","df_train %>% "
-"0","  select_if(is.numeric) %>% "
-"0","  gather() %>% "
-"0","  ggplot(aes(x = value)) +"
-"0","  geom_histogram(bins = 10)+"
-"0","  facet_wrap(~key, scales = ""free_x"")"

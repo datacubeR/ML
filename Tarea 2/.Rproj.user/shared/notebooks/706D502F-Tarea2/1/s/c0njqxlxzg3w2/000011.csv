@@ -1,2 +1,0 @@
-"0","df_train %>% "
-"0","  filter(is.na(diameter))"

@@ -1,6 +1,0 @@
-"0","corr_mat <- df_train[setdiff(colnames(df_train),to_remove)] %>% "
-"0","  select_if(is.numeric) %>% "
-"0","  drop_na() %>% "
-"0","  cor() %>% "
-"0","  data.frame() "
-"0","corr_mat"

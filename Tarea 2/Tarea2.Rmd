@@ -11,6 +11,10 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Introducción 
 
+El siguiente reporte tiene como objetivo analizar el algoritmo de KNN para la predicción del diámetros de asteroides.  Para resolver este problema se nos hizo entrega de dos dataset. Uno de entrenamiento de 100.000 observaciones y 26 features, mientras que para el set de testeo tenemos 37.681 observaciones.
+
+El objetivo final es encontrar el modelo que entregue la mejor performance en el set de testeo, el cual no posee etiquetas. 
+
 ```{r}
 set.seed(42) # Reproducibilidad
 pacman::p_load(tidyverse, magrittr, umap, tidymodels, kknn)
@@ -26,6 +30,7 @@ df_train %>%
   glimpse()
 ```
 
+> Es posible observar que de las 26 variables, la mayoría son de tipo numérico. Se tiene que las variables `spec_B`, `spec_T`, `neo`, `pha` son de tipo categórico y la variable full_name es el nombre asociado a cada asteroide.
 # EDA
 
 ## Vector Objetivo
@@ -136,18 +141,123 @@ corr_mat["diameter"] %>%
 ```
 
 ```{r}
-remove_corr = c("a", "per_y")
-remove_corr_2 = c("i","per_y","om","w","e","condition_code")
+remove_corr = c("i","per_y","om","w","e","condition_code")
 ```
 
 ```{r}
-
 quantile(df_train$diameter, probs = c(0, 0.01,0.05,0.1,0.25,0.5, 0.75, 0.9, 0.95, 0.99, 1), na.rm = TRUE)
 ```
 
 
 # Modelamiento
 
+
+
+Caso 1
+
+
+```{r}
+mean_list <- df_train %>% 
+  select_if(is.numeric) %>% 
+  summarise_each(funs(mean(., na.rm = TRUE))) %>% 
+  as.list()
+```
+```{r}
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+```
+
+```{r}
+mode_list <- df_train %>% 
+  select_if(negate(is.numeric)) %>% 
+  summarise_each(funs(getmode(.))) %>% 
+  as.list()
+  
+```
+
+```{r}
+library(fastDummies)
+train_set <- df_train[,!(names(df_train) %in% c(to_remove,remove_corr, "full_name"))] %>% 
+  drop_na(diameter) %>% 
+  mutate(neo = factor(neo),
+         pha = factor(pha)
+         ) 
+  # summarise_each(funs(sum(is.na(.))))
+```
+
+```{r}
+data_split <- initial_split(train_set, prop = 3/4)
+
+train_data <- training(data_split)
+val_data  <- testing(data_split)
+```
+
+```{r}
+train_data_prep <- train_data %>% 
+  replace_na(mean_list) %>%
+  replace_na(mode_list) %>% 
+  dummy_cols() %>% 
+  select(-neo, -pha)
+
+val_data_prep <- val_data %>% 
+  replace_na(mean_list) %>%
+  replace_na(mode_list) %>% 
+  dummy_cols() %>% 
+  select(-neo, -pha) %>% 
+  scale()
+  
+means <- train_data_prep %>% 
+  summarise_each(funs(mean(.))) 
+sds <- train_data_prep %>% 
+  summarise_each(funs(sd(.))) 
+
+
+```
+
+
+```{r}
+for (i in 1:ncol(train_data_prep)){
+  train_data_prep[i] <- (train_data_prep[i]-as.numeric(means[i]))/as.numeric(sds[i])
+  val_data_prep[i] <- (val_data_prep[i]-as.numeric(means[i]))/as.numeric(sds[i])
+}
+val_data_prep <- val_data_prep %>% as.data.frame()
+
+```
+
+
+```{r}
+train_knn <- function(n){
+  knn_mod <- nearest_neighbor(neighbors = n) %>%
+  set_mode("regression") %>%
+  set_engine("kknn")  %>% 
+  fit(diameter ~ ., data = train_data_prep)
+y_pred <- predict(knn_mod, val_data_prep)
+
+
+return(rmse_vec(
+  truth = val_data_prep$diameter, 
+  estimate = y_pred$.pred
+))
+}
+```
+
+
+
+
+```{r}
+# rmse_3 <- train_knn(3)
+# rmse_5 <- train_knn(5)
+# rmse_7 <- train_knn(7)
+# rmse_9 <- train_knn(9)
+# rmse_11 <- train_knn(11)
+# rmse_13 <- train_knn(13)
+# rmse_15 <- train_knn(15)
+# rmse_17 <- train_knn(17)
+# rmse_19 <- train_knn(19)
+# rmse_21 <- train_knn(21)
+```
 
 
 
