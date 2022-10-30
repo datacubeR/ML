@@ -1,0 +1,554 @@
+---
+title: "Tarea 3: Modelos de Clasifición"
+author: "Alex Alvarez y Alfonso Tobar"
+date: "2022-10-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introducción 
+
+El siguiente reporte tiene como objetivo analizar el algoritmo de KNN para la predicción del diámetros de asteroides.  Para resolver este problema se nos hizo entrega de dos dataset. Uno de entrenamiento de 100.000 observaciones y 26 features, mientras que para el set de testeo tenemos 37.681 observaciones.
+
+El objetivo final es encontrar el modelo que entregue la mejor performance en el set de testeo, el cual no posee etiquetas. 
+
+```{r}
+set.seed(42) # Reproducibilidad
+pacman::p_load(tidyverse, magrittr, umap, tidymodels, corrplot, fastDummies)
+
+df_train <- read_csv("ALUMNOS-trainData.csv") %>% 
+  select(-id)
+df_test <- read_csv("ALUMNOS-evalData.csv") %>% 
+  select(-id)
+```
+
+```{r}
+df_train %>% 
+  glimpse()
+```
+
+> Es posible observar que de las 26 variables, la mayoría son de tipo numérico. Se tiene que las variables `spec_B`, `spec_T`, `neo`, `pha` son de tipo categórico y la variable `full_name` es el nombre asociado a cada asteroide.
+
+Una de las primeras cosas que se puede apreciar del dataset es su alto contenido de valores ausentes.
+
+
+# EDA
+
+## Vector Objetivo
+
+Se quiere chequear el comportamiento del vector objetivo:
+
+```{r}
+df_train %>% 
+  ggplot(aes(x = diameter)) +
+  geom_histogram(fill = "green", color = "black") +
+  ggtitle('Distribución del Diámetro') + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+Se puede apreciar que el vector objetivo está altamente concentrado en valores de diámetro pequeño. Esto es un indicador de que cuenta con valores extremos.
+
+Si observamos el boxplot a continuación, es posible ver que muchos de los valores son valores extremos. 
+
+```{r}
+df_train %>% 
+  ggplot(aes(y=diameter)) +
+    geom_boxplot()
+```
+
+Si chequeamos la distribución de los diámetros nos encontramos con los siguiente:
+
+```{r}
+quantile(df_train$diameter, probs = c(0, 0.01,0.05,0.1,0.25,0.5, 0.75, 0.9, 0.95, 0.99, 1), na.rm = TRUE)
+```
+
+Es posible ver que el percentil 99 es un diámetro de 31.33742. Si revisamos estos valores se tiene lo siguiente:
+
+```{r}
+df_train %>% 
+  filter(diameter > 31.33742)
+```
+Al inspeccionar visualmente estos resultados, es posible ver que no todos son asteroides. Ceres por ejemplo es considerado un planeta enano. Y es de un tamaño demasiado superior en comparación al resto de los asteroides. Creemos que estos valores no son representativos de la distribución de diámetros y no serán considerados al momento del modelamiento.
+
+
+```{r}
+df_train %>% 
+  filter(diameter < 31.33742) %>% 
+  ggplot(aes(x = diameter)) +
+  geom_histogram(fill = "green", color = "black") +
+  ggtitle('Distribución del Diámetro eliminando los valores extremos.') + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+> A partir de ahora, todos los análisis restantes se realizarán luego de filtrar todas las observaciones sobre el percentil 99.
+
+## Distribución variables Numéricas
+
+Posteriormente si analizamos la distribución de las variables numéricas se obtiene lo siguiente 
+
+```{r}
+df_train %>% 
+  filter(diameter < 31.33742) %>% 
+  select_if(is.numeric) %>% 
+  gather() %>% 
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = 10)+
+  facet_wrap(~key, scales = "free_x")
+```
+
+Se puede observar que:
+
+* Variables como `UB`, `G`, `BV` están casi completamente vacíos. 
+* `per_y`, `a`, `ad`, `condition_code`, `q`, están altamente concentrados, y a primera visto no ser ve mucha variabilidad en ellas. 
+* `w`, `om`, `albedo`, tienen una mayor dispersión.
+* `data_arc`, `e`, `H`  y `albedo` tienen una distribución que se puede asemejar a una Normal. 
+
+
+## Distribución variables Categóricas
+
+```{r}
+df_train %>% 
+  ggplot(aes(x = neo)) + geom_bar(fill = "blue", color = "black") +
+  ggtitle('Distribución de Variable neo') + 
+  theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+```{r}
+df_train %>% 
+  ggplot(aes(x = pha)) + geom_bar(fill = "orange", color = "black") +
+  ggtitle('Distribución de Valores variable pha') + 
+  theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+Se puede observar que las variables relevantes son de tipo binario, y en general tienen un valor `N` preponderantemente.
+
+## Chequear los valores ausentes
+
+### Variables Continuas
+
+Una de las cosas que se ha ido observando dentro del análisis exploratorio es el alto nivel de valores ausentes. Si revisamos esto en detalle se obtiene lo siguiente:
+
+```{r}
+df_train %>% 
+  filter(diameter < 31.33742) %>% 
+  select_if(is.numeric) %>% 
+  summarise_each(funs(sum(is.na(.)))) %>% 
+  gather() %>% 
+  mutate(value = value/nrow(df_train)) %>% 
+  arrange(desc(value)) %>% 
+  ggplot(aes(x = reorder(key, -value), y = value)) + 
+  geom_col(fill = "purple" ,color = "black") +
+  scale_y_continuous(labels=scales::percent) +
+  ggtitle('Distribución de Valores Nulos en Variables Continuas') + 
+  theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+Es posible chequear que dentro de las variables continuas, hay una alta proporción de valores ausentes. En particular se puede observar que `G`, `UB`, `BV` y `rot_per` tienen un más del 90% de sus valores ausentes. Mientras que en variables como: `albedo`, `H`, `n_obs_used`, `ad`, `w`, `per_y`, `data_arc`, `moid`, `i`, `om`, `q`, `e`, `a` tienen ~30% de sus valores ausentes. Si bien eliminar los registros con valores ausentes puede ser una buena idea, consideramos que para no perder tanta información relevante sería una buena idea imputarlos.
+
+Un descubrimiento interesante es que existen valores ausentes en el diámetro. Si investigamos en detalle:
+
+```{r}
+df_train %>% 
+  filter(is.na(diameter))
+```
+
+Se puede observar que existe una observación asociada a Psyche, la cual no contiene diámetro. Esto no es útil al momento de entrenar el modelo, por lo cual se eliminará.
+
+
+### Variables Categóricas
+
+Para el caso de las variables categóricas se puede observar lo siguiente:
+
+```{r}
+
+df_train %>% 
+  select_if(negate(is.numeric)) %>% 
+  summarise_each(funs(sum(is.na(.)))) %>% 
+  gather() %>% 
+  mutate(value = value/nrow(df_train)) %>% 
+  arrange(desc(value)) %>% 
+  ggplot(aes(x = reorder(key, -value), y = value)) + 
+  geom_col(fill = "yellow" ,color = "black") +
+  scale_y_continuous(labels=scales::percent) +
+  ggtitle('Distribución de Valores Nulos en Variables Categóricas') + 
+  theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+* `GM`, `IR`, `extent`, `spec_B`, `spec_T` son variables que cuentan con más del 90% de valores ausentes. 
+* `full_name` es una variable que tiene como única utilidad identificar el objeto. 
+* `neo` y `pha`, contienen una cantidad muy pequeña de valores ausentes, por lo que se imputarán.
+
+Luego de analizar los valores ausentes, se considera que se eliminarán todas aquellas variables con más del 90% de valores ausentes. Las variables a remover son las siguientes:
+
+```{r}
+to_remove <- df_train %>% 
+  summarise_each(funs(mean(is.na(.)))) %>% 
+  gather() %>% 
+  filter(value > 0.9) %>% 
+  pull(key)
+to_remove
+```
+
+# Análisis de Correlaciones
+
+Nos interesa calcular si es que existen relaciones que no son saludables para nuestro modelo.
+
+```{r}
+mean_list <- df_train %>% 
+  select_if(is.numeric) %>% 
+  summarise_each(funs(mean(., na.rm = TRUE))) %>% 
+  as.list()
+
+df_train[setdiff(colnames(df_train),to_remove)] %>%
+  select_if(is.numeric) %>% 
+  replace_na(mean_list) %>% 
+  cor() %>% 
+  corrplot(method = 'color')
+
+```
+De acá se puede obtener que varias variables están correlacionadas:
+
+* Por ejemplo `a` está altamente correlacionado con `ad`. 
+* Y quizás `n_obs_used` está inversamente correlacionado con `H`.
+
+```{r}
+corr_mat <- df_train[setdiff(colnames(df_train),to_remove)] %>% 
+  select_if(is.numeric) %>% 
+  replace_na(mean_list) %>%
+  cor() %>% 
+  data.frame() 
+
+corr_mat
+corr_mat["diameter"] %>%
+  arrange(desc(diameter))
+```
+
+De acá podemos decir que variables como `i`, `per_y`, `om`, `w`, `e`, `condition_code` no tienen mucha relación con el vector objetivo, por lo cual se van a remover. Finalmente la lista de valores a remover es la siguiente:
+
+```{r}
+remove_corr = c("i","per_y","om","w","e","condition_code")
+```
+
+# Modelamiento
+
+Para estimar el diámetro se utilizará un modelo KNN. El preprocesamiento de los datos consistirá en:
+
+* Imputar los valores ausentes que sean numéricos con la media. 
+* Imputar los valores ausentes que sean categóricos con la moda.
+* Calcular variables dummy para las variables categóricas. 
+* Centrar y escalar los datos.
+
+ 
+> Disclaimer: Intentamos realizar esto utilizando el framework de tidymodels, es decir, workflows, más recipes más el modelamiento, pero tomaba demasiado tiempo y muchas veces se nos cayó la sesión de R. Por lo que decidimos realizar este procedimiento de manera manual, respetando que todo el proceso se debe realizar con la data de entrenamiento. 
+
+Para validar el modelo se utilizará un holdout dejando un 75% para entrenar y un 25% para validar.
+
+## Caso 1: Eliminando valores extremos
+
+```{r}
+data_split <- initial_split(df_train, prop = 3/4)
+
+train_data <- training(data_split) %>% 
+  filter(diameter < 31.33742) #se eliminan los valores extremos sólo del set de entrenamiento
+val_data  <- testing(data_split)
+```
+
+```{r}
+nrow(train_data)
+nrow(val_data) 
+```
+
+## Imputación
+
+```{r}
+#lista de las medias de cada variable
+mean_list <- train_data %>% 
+  select_if(is.numeric) %>% 
+  summarise_each(funs(mean(., na.rm = TRUE))) %>% 
+  as.list()
+
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+
+#lista de las modas de cada variable
+mode_list <- train_data %>% 
+  select_if(negate(is.numeric)) %>% 
+  summarise_each(funs(getmode(.))) %>% 
+  as.list()
+  
+```
+
+## Preprocesamiento
+
+```{r}
+train_data_prep <- train_data[,!(names(df_train) %in% c(to_remove, remove_corr, "full_name"))] %>% 
+  drop_na(diameter) %>% 
+  mutate(neo = factor(neo),
+         pha = factor(pha)
+         ) %>% 
+  replace_na(mean_list) %>%
+  replace_na(mode_list) %>% 
+  dummy_cols() %>% 
+  select(-neo, -pha)
+
+val_data_prep <- val_data[,!(names(df_train) %in% c(to_remove, remove_corr, "full_name"))] %>% 
+  drop_na(diameter) %>% 
+  mutate(neo = factor(neo),
+         pha = factor(pha)
+         ) %>% 
+  replace_na(mean_list) %>%
+  replace_na(mode_list) %>% 
+  dummy_cols() %>% 
+  select(-neo, -pha)
+```
+
+# Centrar y Escalar
+
+```{r}
+means <- train_data_prep %>% 
+  summarise_each(funs(mean(.))) 
+sds <- train_data_prep %>% 
+  summarise_each(funs(sd(.))) 
+
+for (i in 1:ncol(train_data_prep)){
+  train_data_prep[i] <- (train_data_prep[i]-as.numeric(means[i]))/as.numeric(sds[i])
+  val_data_prep[i] <- (val_data_prep[i]-as.numeric(means[i]))/as.numeric(sds[i])
+}
+val_data_prep <- val_data_prep %>% as.data.frame()
+```
+
+# Entrenamiento del Modelo.
+
+Realizaremos distintas pruebas entrenando con números de vecinos impares desde 3 a 15. 
+
+```{r}
+train_knn <- function(n){
+  knn_mod <- nearest_neighbor(neighbors = n) %>%
+  set_mode("regression") %>%
+  set_engine("kknn")  %>% 
+  fit(diameter ~ ., data = train_data_prep)
+y_pred <- predict(knn_mod, val_data_prep)
+
+
+return(rmse_vec(
+  truth = val_data_prep$diameter, 
+  estimate = y_pred$.pred
+))
+}
+```
+
+Los resultados de nuestro proceso de experimentación se encuentran a continuación:
+
+```{r}
+rmse_3 <- train_knn(3)
+rmse_5 <- train_knn(5)
+rmse_7 <- train_knn(7)
+rmse_9 <- train_knn(9)
+rmse_11 <- train_knn(11)
+rmse_13 <- train_knn(13)
+rmse_15 <- train_knn(15)
+ 
+results <- c(rmse_3, rmse_5, rmse_7, rmse_9, rmse_11, rmse_13, rmse_15)
+results
+```
+
+
+## Caso 2: Sin eliminar casos extremos
+
+Luego de realizar el primer caso, notamos que quizás el modelo podría entender mejor los datos si es que utiliza los valores extremos. Dado que el modelo se evaluará utilizando MSE, creemos que es importante ajustarse a los datos extremos ya que producen una mayor penalización por el tipo de error a utilizar. Por lo tanto, decidimos experimentar sin eliminarlos. 
+
+```{r}
+data_split <- initial_split(df_train, prop = 3/4)
+
+train_data <- training(data_split)
+val_data  <- testing(data_split)
+```
+
+```{r}
+nrow(train_data)
+nrow(val_data) 
+```
+
+## Imputación
+
+```{r}
+#lista de las medias de cada variable
+mean_list <- train_data %>% 
+  select_if(is.numeric) %>% 
+  summarise_each(funs(mean(., na.rm = TRUE))) %>% 
+  as.list()
+
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+
+#lista de las modas de cada variable
+mode_list <- train_data %>% 
+  select_if(negate(is.numeric)) %>% 
+  summarise_each(funs(getmode(.))) %>% 
+  as.list()
+  
+```
+
+## Preprocesamiento
+
+```{r}
+train_data_prep <- train_data[,!(names(df_train) %in% c(to_remove, remove_corr, "full_name"))] %>% 
+  drop_na(diameter) %>% 
+  mutate(neo = factor(neo),
+         pha = factor(pha)
+         ) %>% 
+  replace_na(mean_list) %>%
+  replace_na(mode_list) %>% 
+  dummy_cols() %>% 
+  select(-neo, -pha)
+
+val_data_prep <- val_data[,!(names(df_train) %in% c(to_remove, remove_corr, "full_name"))] %>% 
+  drop_na(diameter) %>% 
+  mutate(neo = factor(neo),
+         pha = factor(pha)
+         ) %>% 
+  replace_na(mean_list) %>%
+  replace_na(mode_list) %>% 
+  dummy_cols() %>% 
+  select(-neo, -pha)
+```
+
+# Centrar y Escalar
+
+```{r}
+means <- train_data_prep %>% 
+  summarise_each(funs(mean(.))) 
+sds <- train_data_prep %>% 
+  summarise_each(funs(sd(.))) 
+
+for (i in 1:ncol(train_data_prep)){
+  train_data_prep[i] <- (train_data_prep[i]-as.numeric(means[i]))/as.numeric(sds[i])
+  val_data_prep[i] <- (val_data_prep[i]-as.numeric(means[i]))/as.numeric(sds[i])
+}
+val_data_prep <- val_data_prep %>% as.data.frame()
+```
+
+# Entrenamiento del Modelo.
+
+Realizaremos distintas pruebas entrenando con números de vecinos impares desde 3 a 15. 
+
+```{r}
+train_knn <- function(n){
+  knn_mod <- nearest_neighbor(neighbors = n) %>%
+  set_mode("regression") %>%
+  set_engine("kknn")  %>% 
+  fit(diameter ~ ., data = train_data_prep)
+y_pred <- predict(knn_mod, val_data_prep)
+
+
+return(rmse_vec(
+  truth = val_data_prep$diameter, 
+  estimate = y_pred$.pred
+))
+}
+```
+
+Los resultados de nuestro proceso de experimentación se encuentran a continuación:
+
+```{r}
+rmse_5 <- train_knn(5)
+rmse_9 <- train_knn(9)
+rmse_15 <- train_knn(15)
+rmse_17 <- train_knn(17)
+
+
+ 
+results <- c(rmse_5, rmse_9, rmse_15, rmse_17)
+results
+```
+
+## Predicción
+
+Para generar la predicción final, se utilizó el número de vecinos que entregó la mejor performance (k = 5) y no se retiraron los valores outliers. Además, se reentrenó aplicando los mismos preprocesamientos, pero ahora con el set de train completo.
+
+```{r}
+n = 5 # mejor modelo
+df_train <- df_train
+```
+
+```{r}
+mean_list <- df_train %>% 
+  select_if(is.numeric) %>% 
+  summarise_each(funs(mean(., na.rm = TRUE))) %>% 
+  as.list()
+
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+
+#lista de las modas de cada variable
+mode_list <- df_train %>% 
+  select_if(negate(is.numeric)) %>% 
+  summarise_each(funs(getmode(.))) %>% 
+  as.list()
+```
+
+```{r}
+train_data_prep <- df_train[,!(names(df_train) %in% c(to_remove,remove_corr, "full_name"))] %>% 
+  drop_na(diameter) %>% 
+  mutate(neo = factor(neo),
+         pha = factor(pha)
+         ) %>% 
+  replace_na(mean_list) %>%
+  replace_na(mode_list) %>% 
+  dummy_cols() %>% 
+  select(-neo, -pha)
+```
+
+```{r}
+ knn_mod <- nearest_neighbor(neighbors = n) %>%
+  set_mode("regression") %>%
+  set_engine("kknn")  %>% 
+  fit(diameter ~ ., data = train_data_prep)
+```
+
+## Preparar el dataset de test para Predicción
+
+Se replica el mismo preprocesamiento para poder generar la predicción del Set de Test.
+
+```{r}
+test_data_prep <- df_test[,!(names(df_test) %in% c(to_remove,remove_corr, "full_name"))] %>% 
+  mutate(neo = factor(neo),
+         pha = factor(pha)
+         ) %>% 
+  replace_na(mean_list) %>%
+  replace_na(mode_list) %>% 
+  dummy_cols() %>% 
+  select(-neo, -pha)
+
+for (i in 1:ncol(test_data_prep)){
+  test_data_prep[i] <- (test_data_prep[i]-as.numeric(means[i]))/as.numeric(sds[i])
+}
+```
+
+```{r}
+df_test["pred"] <- predict(knn_mod, test_data_prep)
+
+df_test %>% 
+  select(full_name, pred) %>% 
+  write_csv("Tarea_2_AA_AT.csv")
+```
+
+# Conclusiones
+
+* En base a la experimentación realizada se aplicó un modelo de KNN, en el cual se probaron dos configuraciones, eliminando y no eliminando valores extremos.
+* Cuando se eliminan valores extremos se probaron los vecinos impares desde 3 a 15, mientras que en el caso de mantener valores extremos se probaron 5, 9, 15 y 17 vecinos.
+* Debido al alto nivel de valores ausentes, se eliminaron aquellos con una proporción sobre el 90% y se imputó el resto (media para valores numéricos, y moda para categóricos).
+* Se eliminaron predictores poca  correlación hacia el vector objetivo.
+* Se eliminaron valores extremos en el vector objetivo del dataset de train. Se consideró sólo hasta el percetil 99.
+* Se puede observar que los mejores resultados se obtuvieron con k = 5 y manteniendo valores extremos.
+* Una vez decidido los mejores hiperparámetros, se reeentrenó el modelo utilizando toda la data de entrenamiento.
