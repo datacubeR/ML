@@ -17,7 +17,7 @@ El objetivo final es encontrar el modelo que entregue la mejor performance en el
 
 ```{r}
 set.seed(42) # Reproducibilidad
-pacman::p_load(tidyverse, magrittr, umap, tidymodels, corrplot, fastDummies)
+pacman::p_load(tidyverse, magrittr, umap, tidymodels, corrplot, fastDummies, patchwork, lubridate)
 
 df_train <- read_csv("ALUMNOS-trainData.csv") %>% 
   select(-id)
@@ -42,47 +42,49 @@ Una de las primeras cosas que se puede apreciar del dataset es su alto contenido
 Se quiere chequear el comportamiento del vector objetivo:
 
 ```{r}
-df_train %>% 
-  ggplot(aes(x = diameter)) +
-  geom_histogram(fill = "green", color = "black") +
-  ggtitle('Distribución del Diámetro') + 
+df_train %>%
+  ggplot(aes(x = noshow)) +
+  geom_histogram(fill = "green", color = "black", binwidth = 3) +
+  ggtitle('Distribución de noshow') + 
   theme(plot.title = element_text(hjust = 0.5))
 ```
-
-
-Se puede apreciar que el vector objetivo está altamente concentrado en valores de diámetro pequeño. Esto es un indicador de que cuenta con valores extremos.
-
-Si observamos el boxplot a continuación, es posible ver que muchos de los valores son valores extremos. 
-
 ```{r}
-df_train %>% 
-  ggplot(aes(y=diameter)) +
-    geom_boxplot()
+df_train$nsbin <- as.numeric(df_train$noshow > 3)
+
+p1 <- df_train %>% filter( noshow<30 ) %>%
+  ggplot(aes(x = noshow)) +
+  geom_histogram(fill = "green", color = "black", binwidth = 1) +
+  ggtitle('Distribución de noshow') + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+p2 <-df_train %>%
+  ggplot(aes(x = nsbin)) +
+  geom_histogram(fill = "green", color = "black", stat="count") +
+  ggtitle('Distribución de noshow > 3') + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+p1 + p2
+summary(df_train$nsbin)
 ```
+
+
+
 
 Si chequeamos la distribución de los diámetros nos encontramos con los siguiente:
 
 ```{r}
-quantile(df_train$diameter, probs = c(0, 0.01,0.05,0.1,0.25,0.5, 0.75, 0.9, 0.95, 0.99, 1), na.rm = TRUE)
+quantile(df_train$noshow, probs = c(0, 0.01,0.05,0.1,0.25,0.5, 0.75, 0.9, 0.95, 0.99, 0.999, 1), na.rm = TRUE)
 ```
 
 Es posible ver que el percentil 99 es un diámetro de 31.33742. Si revisamos estos valores se tiene lo siguiente:
 
 ```{r}
 df_train %>% 
-  filter(diameter > 31.33742)
+  filter(noshow > 44)
 ```
 Al inspeccionar visualmente estos resultados, es posible ver que no todos son asteroides. Ceres por ejemplo es considerado un planeta enano. Y es de un tamaño demasiado superior en comparación al resto de los asteroides. Creemos que estos valores no son representativos de la distribución de diámetros y no serán considerados al momento del modelamiento.
 
 
-```{r}
-df_train %>% 
-  filter(diameter < 31.33742) %>% 
-  ggplot(aes(x = diameter)) +
-  geom_histogram(fill = "green", color = "black") +
-  ggtitle('Distribución del Diámetro eliminando los valores extremos.') + 
-  theme(plot.title = element_text(hjust = 0.5))
-```
 
 > A partir de ahora, todos los análisis restantes se realizarán luego de filtrar todas las observaciones sobre el percentil 99.
 
@@ -92,7 +94,6 @@ Posteriormente si analizamos la distribución de las variables numéricas se obt
 
 ```{r}
 df_train %>% 
-  filter(diameter < 31.33742) %>% 
   select_if(is.numeric) %>% 
   gather() %>% 
   ggplot(aes(x = value)) +
@@ -108,6 +109,22 @@ Se puede observar que:
 * `data_arc`, `e`, `H`  y `albedo` tienen una distribución que se puede asemejar a una Normal. 
 
 
+```{r}
+df_train$wday <- wday(df_train$date, label=TRUE, abbr=FALSE, week_start=1)
+
+w1 <- df_train %>% 
+  ggplot(aes(x = wday)) + geom_bar(fill = "blue", color = "black") +
+  ggtitle('Distribución wday') + 
+  theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+w2 <- ggplot(df_train, aes(x=wday, y=as.numeric(nsbin))) + 
+  geom_bar(stat = "identity")+
+  ggtitle('Distribución nsbin x wday') + 
+  theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+w1 + w2
+```
+
+
 ## Distribución variables Categóricas
 
 ```{r}
@@ -117,24 +134,12 @@ df_train %>%
   theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
 ```
 
-```{r}
-df_train %>% 
-  ggplot(aes(x = pha)) + geom_bar(fill = "orange", color = "black") +
-  ggtitle('Distribución de Valores variable pha') + 
-  theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-```
-
-Se puede observar que las variables relevantes son de tipo binario, y en general tienen un valor `N` preponderantemente.
-
 ## Chequear los valores ausentes
 
 ### Variables Continuas
 
-Una de las cosas que se ha ido observando dentro del análisis exploratorio es el alto nivel de valores ausentes. Si revisamos esto en detalle se obtiene lo siguiente:
-
 ```{r}
 df_train %>% 
-  filter(diameter < 31.33742) %>% 
   select_if(is.numeric) %>% 
   summarise_each(funs(sum(is.na(.)))) %>% 
   gather() %>% 
@@ -146,16 +151,6 @@ df_train %>%
   ggtitle('Distribución de Valores Nulos en Variables Continuas') + 
   theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
 ```
-Es posible chequear que dentro de las variables continuas, hay una alta proporción de valores ausentes. En particular se puede observar que `G`, `UB`, `BV` y `rot_per` tienen un más del 90% de sus valores ausentes. Mientras que en variables como: `albedo`, `H`, `n_obs_used`, `ad`, `w`, `per_y`, `data_arc`, `moid`, `i`, `om`, `q`, `e`, `a` tienen ~30% de sus valores ausentes. Si bien eliminar los registros con valores ausentes puede ser una buena idea, consideramos que para no perder tanta información relevante sería una buena idea imputarlos.
-
-Un descubrimiento interesante es que existen valores ausentes en el diámetro. Si investigamos en detalle:
-
-```{r}
-df_train %>% 
-  filter(is.na(diameter))
-```
-
-Se puede observar que existe una observación asociada a Psyche, la cual no contiene diámetro. Esto no es útil al momento de entrenar el modelo, por lo cual se eliminará.
 
 
 ### Variables Categóricas
@@ -178,20 +173,6 @@ df_train %>%
 
 ```
 
-* `GM`, `IR`, `extent`, `spec_B`, `spec_T` son variables que cuentan con más del 90% de valores ausentes. 
-* `full_name` es una variable que tiene como única utilidad identificar el objeto. 
-* `neo` y `pha`, contienen una cantidad muy pequeña de valores ausentes, por lo que se imputarán.
-
-Luego de analizar los valores ausentes, se considera que se eliminarán todas aquellas variables con más del 90% de valores ausentes. Las variables a remover son las siguientes:
-
-```{r}
-to_remove <- df_train %>% 
-  summarise_each(funs(mean(is.na(.)))) %>% 
-  gather() %>% 
-  filter(value > 0.9) %>% 
-  pull(key)
-to_remove
-```
 
 # Análisis de Correlaciones
 
